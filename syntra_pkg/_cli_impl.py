@@ -16,15 +16,17 @@ from rich.table import Table
 from rich.panel import Panel
 from rich import print as rprint
 
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from config import config, DEFAULT_API_BASE_URL, CLI_NAME, CLI_VERSION
+
 # Create console
 console = Console()
 
-# API Configuration
-API_BASE_URL = "http://localhost:8000"
-
 # Create Typer app
 app = typer.Typer(
-    name="syntra",
+    name=CLI_NAME,
     help="🚀 Syntra - Goalixa AI DevOps Teammate",
     no_args_is_help=True,
     add_completion=False,
@@ -34,18 +36,21 @@ app = typer.Typer(
 @app.command()
 def ask(
     prompt: str = typer.Argument(..., help="Your prompt for Syntra AI"),
-    server: str = typer.Option(API_BASE_URL, "--server", "-s", help="Syntra API server URL"),
+    server: Optional[str] = typer.Option(None, "--server", "-s", help="Syntra API server URL (overrides config)"),
     json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
 ):
     """
     Ask Syntra AI to perform a task.
 
     Example:
-        syntra ask "list all pods in production namespace"
+        syntra-cli ask "list all pods in production namespace"
     """
+    # Use server from config if not provided
+    api_url = server or config.api_base_url
+
     try:
         with console.status("[primary]Asking Syntra AI...[/primary]"):
-            client = httpx.Client(base_url=server, timeout=30.0)
+            client = httpx.Client(base_url=api_url, timeout=30.0)
             response = client.post("/api/ask", json={"prompt": prompt})
             response.raise_for_status()
             result = response.json()
@@ -70,24 +75,27 @@ def ask(
 
 @app.command()
 def interactive(
-    server: str = typer.Option(API_BASE_URL, "--server", "-s", help="Syntra API server URL"),
+    server: Optional[str] = typer.Option(None, "--server", "-s", help="Syntra API server URL (overrides config)"),
 ):
     """
     Start interactive mode.
 
     Example:
-        syntra interactive
+        syntra-cli interactive
     """
     from rich.prompt import Prompt
     from rich.markdown import Markdown
 
+    # Use server from config if not provided
+    api_url = server or config.api_base_url
+
     console.print()
     console.print("🤖 [bold cyan]Syntra - Goalixa AI Teammate[/bold cyan]")
-    console.print(f"ℹ Connected to: [cyan]{server}[/cyan]")
+    console.print(f"ℹ Connected to: [cyan]{api_url}[/cyan]")
     console.print("💡 Type [yellow]help[/yellow] for commands or [yellow]exit[/yellow] to quit\n")
 
     session_queries = 0
-    client = httpx.Client(base_url=server, timeout=30.0)
+    client = httpx.Client(base_url=api_url, timeout=30.0)
 
     try:
         while True:
@@ -145,12 +153,15 @@ def interactive(
 
 @app.command()
 def health(
-    server: str = typer.Option(API_BASE_URL, "--server", "-s", help="Syntra API server URL"),
+    server: Optional[str] = typer.Option(None, "--server", "-s", help="Syntra API server URL (overrides config)"),
 ):
     """Check Syntra API health."""
+    # Use server from config if not provided
+    api_url = server or config.api_base_url
+
     try:
         with console.status("[primary]Checking health...[/primary]"):
-            client = httpx.Client(base_url=server, timeout=30.0)
+            client = httpx.Client(base_url=api_url, timeout=30.0)
             response = client.get("/")
             response.raise_for_status()
             result = response.json()
@@ -181,14 +192,75 @@ def info():
     info_table.add_column("Property", style="cyan")
     info_table.add_column("Value", style="green")
 
-    info_table.add_row("CLI Name", "syntra")
-    info_table.add_row("Version", "0.1.0")
-    info_table.add_row("API Server", API_BASE_URL)
+    info_table.add_row("CLI Name", CLI_NAME)
+    info_table.add_row("Version", CLI_VERSION)
+    info_table.add_row("API Server", config.api_base_url)
+    info_table.add_row("Config File", str(config.USER_CONFIG_FILE))
     info_table.add_row("Python Version", "3.11+")
 
     console.print()
     console.print(info_table)
     console.print()
+
+
+@app.command()
+def config(
+    key: Optional[str] = typer.Argument(None, help="Configuration key to set/view"),
+    value: Optional[str] = typer.Argument(None, help="Configuration value to set"),
+    unset: bool = typer.Option(False, "--unset", "-u", help="Unset (remove) a configuration value"),
+    list_all: bool = typer.Option(False, "--list", "-l", help="List all configuration values"),
+):
+    """
+    Manage Syntra CLI configuration.
+
+    Configuration is stored in ~/.syntra/config.json
+
+    Examples:
+        syntra-cli config                    # List all config
+        syntra-cli config api_base_url       # Get a value
+        syntra-cli config api_base_url http://localhost:9000  # Set a value
+        syntra-cli config api_base_url --unset  # Remove a value
+    """
+    if list_all or (key is None and value is None):
+        # List all configuration
+        all_config = config.get_all()
+
+        if not all_config:
+            console.print("[dim]No custom configuration set.[/dim]")
+            console.print(f"\n[cyan]Default API URL:[/cyan] {DEFAULT_API_BASE_URL}")
+            console.print(f"[cyan]Config file:[/cyan] {config.USER_CONFIG_FILE}")
+            return
+
+        table = Table(title="Syntra Configuration", show_header=True)
+        table.add_column("Key", style="cyan")
+        table.add_column("Value", style="green")
+
+        for k, v in all_config.items():
+            table.add_row(k, str(v))
+
+        console.print()
+        console.print(table)
+        console.print()
+        return
+
+    if unset:
+        # Unset a configuration value
+        config.unset(key)
+        console.print(f"✓ Unset [cyan]{key}[/cyan]", style="green")
+        return
+
+    if value is None:
+        # Get a single configuration value
+        val = config.get(key)
+        if val is None:
+            console.print(f"[dim]Configuration key '[cyan]{key}[/cyan]' not set.[/dim]")
+            console.print(f"Use: [cyan]{CLI_NAME} config {key} <value>[/cyan] to set it.")
+        else:
+            console.print(f"[cyan]{key}[/cyan] = [green]{val}[/green]")
+    else:
+        # Set a configuration value
+        config.set(key, value)
+        console.print(f"✓ Set [cyan]{key}[/cyan] = [green]{value}[/green]", style="green")
 
 
 @app.command()
@@ -239,8 +311,7 @@ def tools():
 def version_callback(value: bool) -> None:
     """Show version and exit."""
     if value:
-        from syntra_pkg import __version__
-        rprint(f"[primary]syntra[/primary] version [bold]{__version__}[/bold]")
+        rprint(f"[primary]{CLI_NAME}[/primary] version [bold]{CLI_VERSION}[/bold]")
         raise typer.Exit()
 
 

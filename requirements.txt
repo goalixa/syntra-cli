@@ -1,0 +1,17 @@
+# Syntra CLI - Requirements
+# Core dependencies for the CLI tool
+
+# CLI Framework
+typer[all]>=0.9.0
+
+# Terminal formatting and output
+rich>=14.0.0
+
+# HTTP client
+httpx>=0.25.0
+
+# Environment/Configuration management
+python-dotenv>=1.0.0
+
+# Optional: Async support
+aiohttp>=3.9.0

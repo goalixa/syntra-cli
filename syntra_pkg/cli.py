@@ -8,7 +8,7 @@ Usage:
     syntra interactive
 """
 
-from CLI.syntra_pkg._cli_impl import app
+from syntra_pkg._cli_impl import app
 
 
 def main():
