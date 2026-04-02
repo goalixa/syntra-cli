@@ -35,7 +35,7 @@ Repository = "https://github.com/goalixa/syntra"
 Issues = "https://github.com/goalixa/syntra/issues"
 
 [project.scripts]
-syntra-cli = "CLI.syntra_pkg.cli:main"
+syntra-cli = "syntra_pkg.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

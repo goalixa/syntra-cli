@@ -7,6 +7,7 @@ It's separated to allow clean package imports.
 """
 
 import sys
+import os
 from pathlib import Path
 import httpx
 from typing import Optional
@@ -16,8 +17,10 @@ from rich.table import Table
 from rich.panel import Panel
 from rich import print as rprint
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add project root to path for config module
+_project_root = Path(__file__).parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
 
 from config import config, DEFAULT_API_BASE_URL, CLI_NAME, CLI_VERSION
 

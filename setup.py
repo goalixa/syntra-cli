@@ -5,7 +5,8 @@ from setuptools import setup, find_packages
 setup(
     name="syntra-cli",
     version="0.1.0",
-    packages=find_packages(exclude=["tests.*", "tests", "*.tests.*", "*.tests", "CLI.syntra_pkg"]),
+    packages=find_packages(where="."),
+    package_dir={"": "."},
     include_package_data=True,
     install_requires=[
         "typer[all]>=0.9.0",
@@ -14,7 +15,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "syntra-cli=CLI.syntra_pkg.cli:main",
+            "syntra-cli=syntra_pkg.cli:main",
         ],
     },
 )
