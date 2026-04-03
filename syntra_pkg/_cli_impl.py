@@ -1,321 +1,67 @@
 #!/usr/bin/env python3
 """
-Syntra CLI Implementation.
+Syntra CLI Implementation - Skill-based architecture.
 
-This module contains the actual CLI implementation.
-It's separated to allow clean package imports.
+This is the main CLI implementation that loads skills and provides
+the command-line interface.
 """
 
 import sys
-import os
 from pathlib import Path
-import httpx
 from typing import Optional
+
 import typer
 from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.prompt import Prompt
-from rich.markdown import Markdown
 from rich import print as rprint
 
-# Add project root to path for config module
-_project_root = Path(__file__).parent.parent
-if str(_project_root) not in sys.path:
-    sys.path.insert(0, str(_project_root))
-
-from config import config as cfg, DEFAULT_API_BASE_URL, CLI_NAME, CLI_VERSION, USER_CONFIG_FILE
+# Import from new architecture
+from syntra_pkg.config import settings
+from syntra_pkg.skills import skill_registry, SkillContext
+from syntra_pkg import __version__
 
 # Create console
 console = Console()
 
-# Create Typer app
+# Create main Typer app
 app = typer.Typer(
-    name=CLI_NAME,
+    name="syntra-cli",
     help="🚀 Syntra - Goalixa AI DevOps Teammate",
     no_args_is_help=False,
     add_completion=False,
     invoke_without_command=True,
+    rich_markup_mode="rich",
 )
 
 
-@app.command()
-def ask(
-    prompt: str = typer.Argument(..., help="Your prompt for Syntra AI"),
-    server: Optional[str] = typer.Option(None, "--server", "-s", help="Syntra API server URL (overrides config)"),
-    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
-):
-    """
-    Ask Syntra AI to perform a task.
+# Initialize skills at module load time
+def _initialize_skills_module():
+    """Initialize skills when module is loaded."""
+    # Discover built-in skills
+    skill_registry.discover_builtin()
 
-    Example:
-        syntra-cli ask "list all pods in production namespace"
-    """
-    # Use server from config if not provided
-    api_url = server or cfg.api_base_url
+    # Discover user skills (if enabled)
+    if settings.skills.auto_discover:
+        try:
+            skill_registry.discover_user_skills()
+        except Exception:
+            pass  # Silently skip if user skills can't be loaded
 
-    try:
-        with console.status("[primary]Asking Syntra AI...[/primary]"):
-            client = httpx.Client(base_url=api_url, timeout=30.0)
-            response = client.post("/api/ask", json={"prompt": prompt})
-            response.raise_for_status()
-            result = response.json()
-            client.close()
-
-        if json_output:
-            import json
-            rprint(result)
-        else:
-            console.print()
-            console.print(Panel(result.get("result", "No response"), title="✨ Syntra AI Response", border_style="green"))
-            console.print()
-            console.print("✓ Task completed!", style="green")
-
-    except httpx.HTTPError as e:
-        console.print(f"✗ API Error: {e}", style="red")
-        raise typer.Exit(1)
-    except KeyboardInterrupt:
-        console.print("\n⚠ Operation cancelled by user", style="yellow")
-        raise typer.Exit(130)
+    # Register all skill commands with the app
+    for skill in skill_registry.list(include_hidden=False):
+        try:
+            skill.register(app)
+        except Exception:
+            pass  # Skip skills that fail to register
 
 
-@app.command()
-def interactive(
-    server: Optional[str] = typer.Option(None, "--server", "-s", help="Syntra API server URL (overrides config)"),
-):
-    """
-    Start interactive mode.
-
-    Example:
-        syntra-cli interactive
-    """
-
-    # Use server from config if not provided
-    api_url = server or cfg.api_base_url
-
-    console.print()
-    console.print("🤖 [bold cyan]Syntra - Goalixa AI Teammate[/bold cyan]")
-    console.print(f"ℹ Connected to: [cyan]{api_url}[/cyan]")
-    console.print("💡 Type [yellow]help[/yellow] for commands or [yellow]exit[/yellow] to quit\n")
-
-    session_queries = 0
-    client = httpx.Client(base_url=api_url, timeout=30.0)
-
-    try:
-        while True:
-            try:
-                prompt = Prompt.ask(f"[bold cyan]syntra[/bold cyan] [dim]({session_queries})[/dim]")
-                prompt = prompt.strip()
-
-                if not prompt:
-                    continue
-
-                if prompt.lower() in ["exit", "quit", "q"]:
-                    console.print("\n👋 Goodbye! [dim](Session ended)[/dim]\n")
-                    break
-
-                if prompt.lower() == "clear":
-                    console.clear()
-                    continue
-
-                if prompt.lower() == "help":
-                    console.print("\n[bold]Available Commands:[/bold]")
-                    console.print("  [cyan]help[/cyan]   - Show this help message")
-                    console.print("  [cyan]clear[/cyan]  - Clear the screen")
-                    console.print("  [cyan]exit[/cyan]   - Exit interactive mode\n")
-                    continue
-
-                session_queries += 1
-
-                with console.status("[primary]Thinking...[/primary]"):
-                    response = client.post("/api/ask", json={"prompt": prompt})
-                    response.raise_for_status()
-                    result = response.json()
-
-                result_text = result.get("result", "No response")
-
-                if any(marker in result_text for marker in ["```", "**", "*", "#", "- "]):
-                    try:
-                        md = Markdown(result_text)
-                        console.print(md)
-                    except:
-                        console.print(Panel(result_text, border_style="green", padding=(0, 1)))
-                else:
-                    console.print(Panel(result_text, border_style="green", padding=(0, 1)))
-
-            except httpx.HTTPError as e:
-                console.print(f"[red]✗ Error: {e}[/red]\n")
-
-    except KeyboardInterrupt:
-        console.print("\n⚠ Exiting interactive mode...", style="yellow")
-
-    finally:
-        client.close()
-        if session_queries > 0:
-            console.print(f"[dim]Session summary: {session_queries} queries[/dim]\n")
-
-
-@app.command()
-def health(
-    server: Optional[str] = typer.Option(None, "--server", "-s", help="Syntra API server URL (overrides config)"),
-):
-    """Check Syntra API health."""
-    # Use server from config if not provided
-    api_url = server or cfg.api_base_url
-
-    try:
-        with console.status("[primary]Checking health...[/primary]"):
-            client = httpx.Client(base_url=api_url, timeout=30.0)
-            response = client.get("/")
-            response.raise_for_status()
-            result = response.json()
-            client.close()
-
-        table = Table(title="Syntra Health Status", show_header=True)
-        table.add_column("Component", style="cyan")
-        table.add_column("Status", style="green")
-        table.add_column("Details", style="dim")
-
-        for key, value in result.items():
-            table.add_row(key, "✓ Healthy", str(value))
-
-        console.print()
-        console.print(table)
-        console.print()
-        console.print("✓ All systems operational!", style="green")
-
-    except httpx.HTTPError as e:
-        console.print(f"✗ Health check failed: {e}", style="red")
-        raise typer.Exit(1)
-
-
-@app.command()
-def info():
-    """Show Syntra CLI information."""
-    info_table = Table(title="Syntra CLI Information", show_header=True)
-    info_table.add_column("Property", style="cyan")
-    info_table.add_column("Value", style="green")
-
-    info_table.add_row("CLI Name", CLI_NAME)
-    info_table.add_row("Version", CLI_VERSION)
-    info_table.add_row("API Server", cfg.api_base_url)
-    info_table.add_row("Config File", str(USER_CONFIG_FILE))
-    info_table.add_row("Python Version", "3.11+")
-
-    console.print()
-    console.print(info_table)
-    console.print()
-
-
-@app.command()
-def config(
-    key: Optional[str] = typer.Argument(None, help="Configuration key to set/view"),
-    value: Optional[str] = typer.Argument(None, help="Configuration value to set"),
-    unset: bool = typer.Option(False, "--unset", "-u", help="Unset (remove) a configuration value"),
-    list_all: bool = typer.Option(False, "--list", "-l", help="List all configuration values"),
-):
-    """
-    Manage Syntra CLI configuration.
-
-    Configuration is stored in ~/.syntra/cfg.json
-
-    Examples:
-        syntra-cli config                    # List all config
-        syntra-cli config api_base_url       # Get a value
-        syntra-cli config api_base_url http://localhost:9000  # Set a value
-        syntra-cli config api_base_url --unset  # Remove a value
-    """
-    if list_all or (key is None and value is None):
-        # List all configuration
-        all_config = cfg.get_all()
-
-        if not all_config:
-            console.print("[dim]No custom configuration set.[/dim]")
-            console.print(f"\n[cyan]Default API URL:[/cyan] {DEFAULT_API_BASE_URL}")
-            console.print(f"[cyan]Config file:[/cyan] {USER_CONFIG_FILE}")
-            return
-
-        table = Table(title="Syntra Configuration", show_header=True)
-        table.add_column("Key", style="cyan")
-        table.add_column("Value", style="green")
-
-        for k, v in all_config.items():
-            table.add_row(k, str(v))
-
-        console.print()
-        console.print(table)
-        console.print()
-        return
-
-    if unset:
-        # Unset a configuration value
-        cfg.unset(key)
-        console.print(f"✓ Unset [cyan]{key}[/cyan]", style="green")
-        return
-
-    if value is None:
-        # Get a single configuration value
-        val = cfg.get(key)
-        if val is None:
-            console.print(f"[dim]Configuration key '[cyan]{key}[/cyan]' not set.[/dim]")
-            console.print(f"Use: [cyan]{CLI_NAME} config {key} <value>[/cyan] to set it.")
-        else:
-            console.print(f"[cyan]{key}[/cyan] = [green]{val}[/green]")
-    else:
-        # Set a configuration value
-        cfg.set(key, value)
-        console.print(f"✓ Set [cyan]{key}[/cyan] = [green]{value}[/green]", style="green")
-
-
-@app.command()
-def agents():
-    """List available agents."""
-    agents_table = Table(title="Available Agents", show_header=True)
-    agents_table.add_column("Agent", style="cyan")
-    agents_table.add_column("Description", style="white")
-    agents_table.add_column("Status", style="yellow")
-
-    agents_data = [
-        ("PlannerAgent", "Plans tasks based on prompts", "⚠️ Stub"),
-        ("DevOpsAgent", "Executes DevOps operations", "⚠️ Stub"),
-        ("ReviewerAgent", "Reviews and validates results", "⚠️ Stub"),
-    ]
-
-    for agent, desc, status in agents_data:
-        agents_table.add_row(agent, desc, status)
-
-    console.print()
-    console.print(agents_table)
-    console.print()
-    console.print("⚠ Note: All agents are currently in stub implementation", style="yellow")
-
-
-@app.command()
-def tools():
-    """List available tools."""
-    tools_table = Table(title="Available Tools", show_header=True)
-    tools_table.add_column("Tool", style="cyan")
-    tools_table.add_column("Description", style="white")
-    tools_table.add_column("Status", style="green")
-
-    tools_data = [
-        ("Kubernetes", "Pod listing and management", "✓ Basic"),
-        ("Git", "Repository operations", "❌ Not Implemented"),
-        ("Logs", "Log analysis", "❌ Not Implemented"),
-    ]
-
-    for tool, desc, status in tools_data:
-        tools_table.add_row(tool, desc, status)
-
-    console.print()
-    console.print(tools_table)
-    console.print()
+# Initialize skills when module is loaded
+_initialize_skills_module()
 
 
 def version_callback(value: bool) -> None:
     """Show version and exit."""
     if value:
-        rprint(f"[primary]{CLI_NAME}[/primary] version [bold]{CLI_VERSION}[/bold]")
+        rprint(f"[primary]syntra-cli[/primary] version [bold]{__version__}[/bold]")
         raise typer.Exit()
 
 
@@ -330,97 +76,204 @@ def main(
         is_eager=True,
         help="Show version and exit",
     ),
+    config: Optional[str] = typer.Option(
+        None,
+        "--config",
+        "-C",
+        help="Path to custom config file",
+    ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="Enable debug mode",
+    ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        "-q",
+        help="Minimal output",
+    ),
 ):
     """
     Syntra - Goalixa AI DevOps Teammate.
 
     Running without arguments starts interactive mode.
     """
+    # Handle custom config
+    if config:
+        settings._user_config_file = Path(config)
+        settings.reload()
+
+    # Handle debug mode
+    if debug:
+        settings.set("dev.debug", True, persist=False)
+
     # If no subcommand was provided, start interactive mode
     if ctx.invoked_subcommand is None:
-        api_url = cfg.api_base_url
+        _start_interactive_mode()
 
-        console.print()
-        console.print("🤖 [bold cyan]Syntra - Goalixa AI Teammate[/bold cyan]")
-        console.print(f"ℹ Connected to: [cyan]{api_url}[/cyan]")
-        console.print("💡 Type [yellow]help[/yellow] for commands or [yellow]exit[/yellow] to quit\n")
 
-        session_queries = 0
-        client = httpx.Client(base_url=api_url, timeout=30.0)
+def _start_interactive_mode():
+    """Start the interactive REPL."""
+    import httpx
+    from rich.prompt import Prompt
+    from rich.panel import Panel
+    from rich.markdown import Markdown
 
-        try:
-            while True:
-                try:
-                    prompt = Prompt.ask(f"[bold cyan]syntra[/bold cyan] [dim]({session_queries})[/dim]")
-                    prompt = prompt.strip()
+    api_url = settings.api.base_url
 
-                    if not prompt:
+    # Display welcome message
+    console.print()
+    console.print("🤖 [bold cyan]Syntra - Goalixa AI Teammate[/bold cyan]")
+    console.print(f"ℹ Connected to: [cyan]{api_url}[/cyan]")
+    console.print(f"💡 Type [yellow]help[/yellow] for commands or [yellow]exit[/yellow] to quit")
+    console.print(f"📋 Skills: [cyan]{', '.join(settings.skills.enabled)}[/cyan]\n")
+
+    session_queries = 0
+    client = httpx.Client(
+        base_url=api_url,
+        timeout=settings.api.timeout,
+    )
+
+    try:
+        while True:
+            try:
+                # Build prompt based on settings
+                prompt_style = settings.cli.prompt_style
+                count_display = f" [dim]({session_queries})[/dim]" if session_queries > 0 else ""
+
+                if prompt_style == "minimal":
+                    prompt_text = "> "
+                elif prompt_style == "context":
+                    # Get git context if available
+                    try:
+                        import subprocess
+                        branch = subprocess.check_output(
+                            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                            stderr=subprocess.DEVNULL,
+                        ).decode().strip()
+                        context_str = f" [{branch}]"
+                    except Exception:
+                        context_str = ""
+                    prompt_text = f"[bold cyan]syntra{context_str}[/bold cyan]{count_display} > "
+                else:
+                    # Fancy (default)
+                    prompt_text = f"[bold cyan]syntra[/bold cyan]{count_display} > "
+
+                prompt = Prompt.ask(prompt_text)
+                prompt = prompt.strip()
+
+                if not prompt:
+                    continue
+
+                # Handle exit commands
+                if prompt.lower() in ["exit", "quit", "q"]:
+                    console.print("\n👋 Goodbye! [dim](Session ended)[/dim]\n")
+                    break
+
+                # Handle clear command
+                if prompt.lower() == "clear":
+                    console.clear()
+                    continue
+
+                # Handle help command
+                if prompt.lower() == "help":
+                    _print_interactive_help()
+                    continue
+
+                # Handle slash commands
+                if prompt.startswith("/"):
+                    handled = _handle_slash_command(prompt, session_queries, api_url)
+                    if handled == "continue":
                         continue
-
-                    if prompt.lower() in ["exit", "quit", "q"]:
-                        console.print("\n👋 Goodbye! [dim](Session ended)[/dim]\n")
+                    elif handled == "exit":
                         break
 
-                    if prompt.lower() == "clear":
-                        console.clear()
-                        continue
+                session_queries += 1
 
-                    if prompt.lower() == "help":
-                        console.print("\n[bold]Available Commands:[/bold]")
-                        console.print("  [cyan]help[/cyan]   - Show this help message")
-                        console.print("  [cyan]clear[/cyan]  - Clear the screen")
-                        console.print("  [cyan]exit[/cyan]   - Exit interactive mode")
-                        console.print("  [cyan]/clear[/cyan] - Clear conversation context")
-                        console.print("  [cyan]/info[/cyan]  - Show session info\n")
-                        continue
+                # Send request to API
+                with console.status("[primary]Thinking...[/primary]"):
+                    response = client.post("/api/ask", json={"prompt": prompt})
+                    response.raise_for_status()
+                    result = response.json()
 
-                    # Special slash commands
-                    if prompt.startswith("/"):
-                        if prompt.lower() == "/clear":
-                            session_queries = 0
-                            console.print("[dim]✓ Conversation context cleared[/dim]\n")
-                            continue
-                        elif prompt.lower() == "/info":
-                            console.print(f"\n[bold]Session Info:[/bold]")
-                            console.print(f"  Queries: [cyan]{session_queries}[/cyan]")
-                            console.print(f"  API URL: [cyan]{api_url}[/cyan]")
-                            console.print(f"  Config: [cyan]{USER_CONFIG_FILE}[/cyan]\n")
-                            continue
-                        else:
-                            console.print(f"[yellow]Unknown command: {prompt}[/yellow]")
-                            console.print("Type [cyan]help[/cyan] for available commands\n")
-                            continue
+                result_text = result.get("result", "No response")
 
-                    session_queries += 1
+                # Render response
+                _render_response(result_text)
 
-                    with console.status("[primary]Thinking...[/primary]"):
-                        response = client.post("/api/ask", json={"prompt": prompt})
-                        response.raise_for_status()
-                        result = response.json()
+            except httpx.HTTPError as e:
+                console.print(f"[red]✗ Error: {e}[/red]\n")
 
-                    result_text = result.get("result", "No response")
+    except KeyboardInterrupt:
+        console.print("\n⚠ Exiting interactive mode...", style="yellow")
 
-                    if any(marker in result_text for marker in ["```", "**", "*", "#", "- "]):
-                        try:
-                            md = Markdown(result_text)
-                            console.print(md)
-                        except:
-                            console.print(Panel(result_text, border_style="green", padding=(0, 1)))
-                    else:
-                        console.print(Panel(result_text, border_style="green", padding=(0, 1)))
+    finally:
+        client.close()
 
-                except httpx.HTTPError as e:
-                    console.print(f"[red]✗ Error: {e}[/red]\n")
+        # Shutdown all skills
+        skill_registry.shutdown_all()
 
-        except KeyboardInterrupt:
-            console.print("\n⚠ Exiting interactive mode...", style="yellow")
+        if session_queries > 0:
+            console.print(f"[dim]Session summary: {session_queries} queries[/dim]\n")
 
-        finally:
-            client.close()
-            if session_queries > 0:
-                console.print(f"[dim]Session summary: {session_queries} queries[/dim]\n")
 
-        raise typer.Exit(0)
+def _print_interactive_help() -> None:
+    """Print help for interactive mode."""
+    console.print("\n[bold]Available Commands:[/bold]")
+    console.print("  [cyan]help[/cyan]     - Show this help message")
+    console.print("  [cyan]clear[/cyan]    - Clear the screen")
+    console.print("  [cyan]exit[/cyan]     - Exit interactive mode")
+    console.print("\n[bold]Slash Commands:[/bold]")
+    console.print("  [cyan]/clear[/cyan]   - Clear conversation context")
+    console.print("  [cyan]/info[/cyan]    - Show session info")
+    console.print("  [cyan]/settings[/cyan]- Show current settings")
+    console.print("  [cyan]/skills[/cyan]  - List available skills")
+    console.print()
+
+
+def _handle_slash_command(prompt: str, count: int, api_url: str) -> str:
+    """Handle slash commands. Returns 'continue', 'exit', or None."""
+    if prompt.lower() == "/clear":
+        console.print("[dim]✓ Conversation context cleared[/dim]\n")
+        return "continue"
+    elif prompt.lower() == "/info":
+        console.print(f"\n[bold]Session Info:[/bold]")
+        console.print(f"  Queries: [cyan]{count}[/cyan]")
+        console.print(f"  API URL: [cyan]{api_url}[/cyan]")
+        console.print(f"  Config: [cyan]{settings._user_config_file}[/cyan]\n")
+        return "continue"
+    elif prompt.lower() == "/settings":
+        console.print(f"\n[bold]Current Settings:[/bold]")
+        console.print(f"  Theme: [cyan]{settings.cli.theme}[/cyan]")
+        console.print(f"  Prompt: [cyan]{settings.cli.prompt_style}[/cyan]")
+        console.print(f"  Format: [cyan]{settings.output.format}[/cyan]")
+        console.print(f"  Stream: [cyan]{settings.output.stream}[/cyan]\n")
+        return "continue"
+    elif prompt.lower() == "/skills":
+        console.print(f"\n[bold]Available Skills:[/bold]")
+        for skill in skill_registry.list(include_hidden=False):
+            enabled = "✓" if skill.name in settings.skills.enabled else " "
+            console.print(f"  [{enabled}] [cyan]{skill.name}[/cyan] - {skill.description}")
+        console.print()
+        return "continue"
+    else:
+        console.print(f"[yellow]Unknown command: {prompt}[/yellow]")
+        console.print("Type [cyan]help[/cyan] for available commands\n")
+        return "continue"
+
+
+def _render_response(text: str) -> None:
+    """Render AI response."""
+    # Check if it looks like markdown
+    if any(marker in text for marker in ["```", "**", "*", "#", "- "]):
+        try:
+            md = Markdown(text)
+            console.print(md)
+        except Exception:
+            console.print(Panel(text, border_style="green", padding=(0, 1)))
+    else:
+        console.print(Panel(text, border_style="green", padding=(0, 1)))
 
 
 if __name__ == "__main__":
