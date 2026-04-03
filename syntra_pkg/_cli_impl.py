@@ -12,6 +12,8 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.panel import Panel
+from rich.markdown import Markdown
 from rich import print as rprint
 
 # Import from new architecture
